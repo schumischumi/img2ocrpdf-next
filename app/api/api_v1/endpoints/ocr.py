@@ -1,3 +1,11 @@
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Any, Optional
+
+from schemas.ocr import OcrBase, Ocr
+from core.config import settings
+
+router = APIRouter()
+
 import os
 import cv2
 import pytesseract
@@ -8,6 +16,14 @@ from PIL import Image
 import pytesseract
 
 
+from nextcloud import NextCloud
+
+NEXTCLOUD_URL = settings.NEXTCLOUD_URL
+NEXTCLOUD_USERNAME = settings.NEXTCLOUD_USERNAME
+NEXTCLOUD_PASSWORD = settings.NEXTCLOUD_PASSWORD
+NEXTCLOUD_OCR_INPUT_DIR = settings.NEXTCLOUD_OCR_INPUT_DIR
+NEXTCLOUD_OCR_OUTPUT_DIR = settings.NEXTCLOUD_OCR_OUTPUT_DIR
+NEXTCLOUD_OCR_TAG = settings.NEXTCLOUD_OCR_TAG
 
 
 def apply_threshold(img, argument):    
@@ -35,7 +51,7 @@ def get_string(img_path, method):
         os.makedirs(output_path)
 
     # Rescale the image, if needed.    
-    img = cv2.resize(img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+    #img = cv2.resize(img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
 
 
     # Convert to gray    
@@ -46,65 +62,61 @@ def get_string(img_path, method):
     img = cv2.erode(img, kernel, iterations=1)
 
     # Apply threshold to get image with only black and white    
-    img = apply_threshold(img, method)
+    #img = apply_threshold(img, method)
+    #img = cv2.threshold(cv2.GaussianBlur(img, (3, 3), 0), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
 
     # Save the filtered image in the output directory    
     save_path = os.path.join(output_path, file_name + "_filter_" + str(method) + ".jpg")    
+    print(save_path)
     cv2.imwrite(save_path, img)    
     
     # Recognize text with tesseract for python    
     result = pytesseract.image_to_string(img, lang="deu")
+    pdf = pytesseract.image_to_pdf_or_hocr(img, extension='pdf', lang="deu")
+    with open(os.path.join(output_path, file_name + "_filter_" + str(method) + ".pdf") , 'w+b') as f:
+        f.write(pdf) # pdf type is bytes by default
+    pdf = pytesseract.image_to_pdf_or_hocr(img_path, extension='pdf', lang="deu")
+    with open(os.path.join(output_path, file_name + "_filter_2.pdf") , 'w+b') as f:
+        f.write(pdf) # pdf type is bytes by default
 
 
     return result
 
 
+@router.post("/image2pdf", status_code=200, response_model=Ocr)
+def image2pdf(*, image_id: int,) -> dict:
+    """
+    Convert Image to PDF
+    """
+    try:
+        workdir = tempfile.mkdtemp(prefix="ocr_")
+        with NextCloud(
+                NEXTCLOUD_URL,
+                user=NEXTCLOUD_USERNAME,
+                password=NEXTCLOUD_PASSWORD,
+                ) as nxc:
+            nc_file_list = nxc.list_folders(NEXTCLOUD_OCR_INPUT_DIR).data
+            my_filter_iter = filter(lambda x: x.file_id == image_id, nc_file_list)
 
-# If you don't have tesseract executable in your PATH, include the following:
-pytesseract.pytesseract.tesseract_cmd = r'<full_path_to_your_tesseract_executable>'
-# Example tesseract_cmd = r'C:\Program Files (x86)\Tesseract-OCR\tesseract'
+            nc_file = next(my_filter_iter).href
 
-# Simple image to string
-print(pytesseract.image_to_string(Image.open('test.png')))
+            nc_file_remote_name = nc_file.replace(nc_file.split(NEXTCLOUD_OCR_INPUT_DIR)[0],"")
+            nc_file_remote = nxc.get_file(nc_file_remote_name)
 
-# List of available languages
-print(pytesseract.get_languages(config=''))
+            nc_file_name, nc_file_ext = os.path.splitext(os.path.basename(nc_file))
+            nc_file_remote.download(target=workdir)
+            pdf = pytesseract.image_to_pdf_or_hocr(os.path.join(workdir, nc_file_name + nc_file_ext), extension='pdf', lang="deu")
+            file_ocr_name = os.path.join(workdir, nc_file_name + "-" + str(image_id) + ".pdf")
+            with open(file_ocr_name, 'w+b') as file_ocr:
+                file_ocr.write(pdf)
 
-# French text image to string
-print(pytesseract.image_to_string(Image.open('test-european.jpg'), lang='fra'))
+            file_ocr_remote = NEXTCLOUD_OCR_OUTPUT_DIR + "/" + nc_file_name + "-" + str(image_id) + ".pdf"
+            nxc.upload_file(file_ocr_name, file_ocr_remote).data
 
-# In order to bypass the image conversions of pytesseract, just use relative or absolute image path
-# NOTE: In this case you should provide tesseract supported images or tesseract will return error
-print(pytesseract.image_to_string('test.png'))
+            nc_file_remote.add_tag(tag_name='ORC_DONE')
+        shutil.rmtree(workdir)
 
-# Batch processing with a single file containing the list of multiple image file paths
-print(pytesseract.image_to_string('images.txt'))
-
-# Timeout/terminate the tesseract job after a period of time
-try:
-    print(pytesseract.image_to_string('test.jpg', timeout=2)) # Timeout after 2 seconds
-    print(pytesseract.image_to_string('test.jpg', timeout=0.5)) # Timeout after half a second
-except RuntimeError as timeout_error:
-    # Tesseract processing is terminated
-    pass
-
-# Get bounding box estimates
-print(pytesseract.image_to_boxes(Image.open('test.png')))
-
-# Get verbose data including boxes, confidences, line and page numbers
-print(pytesseract.image_to_data(Image.open('test.png')))
-
-# Get information about orientation and script detection
-print(pytesseract.image_to_osd(Image.open('test.png')))
-
-# Get a searchable PDF
-pdf = pytesseract.image_to_pdf_or_hocr('test.png', extension='pdf')
-with open('test.pdf', 'w+b') as f:
-    f.write(pdf) # pdf type is bytes by default
-
-# Get HOCR output
-hocr = pytesseract.image_to_pdf_or_hocr('test.png', extension='hocr')
-
-# Get ALTO XML output
-xml = pytesseract.image_to_alto_xml('test.png')
+        return {"image_id": image_id,"message": "successfully converted " + nc_file_remote_name + " to " + file_ocr_remote, "status": "OK"}
+    except Exception as e:
+        return {"image_id": image_id,"message": str(e), "status": "Failure"}
