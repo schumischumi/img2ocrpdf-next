@@ -3,7 +3,7 @@ from pydantic import BaseModel, HttpUrl
 from typing import Sequence
 
 class OcrBase(BaseModel):
-    image_id: int
+    image_path: str
 
 # Properties to return to client
 class Ocr(OcrBase):

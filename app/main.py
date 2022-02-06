@@ -24,8 +24,8 @@ def root(
 app.include_router(api_router, prefix=settings.API_V1_STR)  # <----- API versioning
 app.include_router(root_router)
 
-if __name__ == "__main__":
+#if __name__ == "__main__":
     # Use this for debugging purposes only
-    import uvicorn
+    #import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="debug")
+    #uvicorn.run(app, host="0.0.0.0", port=8001, log_level="debug")
