@@ -1,18 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from typing import Any, Optional
 
-from schemas.ocr import OcrBase, Ocr
+from schemas.ocr import OcrBase, OcrBatch, OcrImage
 from core.config import settings
 
 router = APIRouter()
 
 import os
-#import cv2
 import pytesseract
-#import numpy as np
 import tempfile
 import shutil
-#from PIL import Image
 import pytesseract
 import mimetypes
 from nextcloud import NextCloud
@@ -47,17 +44,16 @@ logging.debug('NEXTCLOUD_OCR_TAG: ' + NEXTCLOUD_OCR_TAG)
 
 def ocr_batch(images: list):
     for image_path in images:
-        print(image_path)
         post_images(image_path=image_path)
 
-@router.post("/batch", status_code=200, response_model=Ocr)
+@router.post("/batch", status_code=200, response_model=OcrBatch)
 async def post_batch(*, runbatch: bool, background_tasks: BackgroundTasks) -> dict:
     """
     Convert all images in the backup folder to PDF
     """
 
     if(not runbatch):
-        return {"image_path": runbatch,"message": "Nothing to do", "status": "Ignored"}
+        return {"batch": runbatch,"message": "Nothing to do", "status": "Ignored"}
 
     image_list = []
     try:
@@ -80,7 +76,6 @@ async def post_batch(*, runbatch: bool, background_tasks: BackgroundTasks) -> di
 
                 if mime != None:
                     mime = mime.split('/')[0]
-                    print(mime)
                     logging.debug('image_path: ' + image_path)
                 if(not tag_scanned and not image_path.endswith('/') and mime != None and mime == 'image'):
                     if(image_path.startswith('/remote.php/dav/files/' + NEXTCLOUD_USERNAME)):
@@ -89,11 +84,11 @@ async def post_batch(*, runbatch: bool, background_tasks: BackgroundTasks) -> di
                     image_list.append(image_path)
         if len(image_list) > 0:
             background_tasks.add_task(ocr_batch, image_list)
-        return {"image_path": runbatch,"message": str(len(image_list)) + " messages will be processed", "status": "OK"}
+        return {"batch": runbatch,"message": str(len(image_list)) + " messages will be processed", "status": "OK"}
     except Exception as e:
-        return {"image_path": runbatch,"message": str(e), "status": "Failure"}
+        return {"batch": runbatch,"message": str(e), "status": "Failure"}
 
-@router.post("/images", status_code=200, response_model=Ocr)
+@router.post("/images", status_code=200, response_model=OcrImage)
 def post_images(*, image_path: str,) -> dict:
     """
     Convert Image to PDF
