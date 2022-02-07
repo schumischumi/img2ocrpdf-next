@@ -1,8 +1,5 @@
-opencv-python-headless
 nextcloud-api-wrapper
 pytesseract
-numpy
-Pillow
 fastapi
 pydantic
 uvicorn

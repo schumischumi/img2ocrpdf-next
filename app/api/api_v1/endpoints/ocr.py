@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from typing import Any, Optional
 
 from schemas.ocr import OcrBase, Ocr
@@ -7,15 +7,14 @@ from core.config import settings
 router = APIRouter()
 
 import os
-import cv2
+#import cv2
 import pytesseract
-import numpy as np
+#import numpy as np
 import tempfile
 import shutil
-from PIL import Image
+#from PIL import Image
 import pytesseract
-
-
+import mimetypes
 from nextcloud import NextCloud
 import logging
 import sys
@@ -37,24 +36,69 @@ VERIFY_INPUTPATH = settings.VERIFY_INPUTPATH
 level = logging.getLevelName(settings.OCR_LOGLEVEL)
 logger.setLevel(level)
 
-# new endpoint for batch
-# have do tag before this
 
+logging.debug('NEXTCLOUD_URL: ' + NEXTCLOUD_URL)
+logging.debug('NEXTCLOUD_USERNAME: ' + NEXTCLOUD_USERNAME)
+logging.debug('NEXTCLOUD_PASSWORD: ' + NEXTCLOUD_PASSWORD)
+logging.debug('NEXTCLOUD_OCR_INPUT_DIR: ' + NEXTCLOUD_OCR_INPUT_DIR)
+logging.debug('NEXTCLOUD_OCR_OUTPUT_DIR: ' + NEXTCLOUD_OCR_OUTPUT_DIR)
+logging.debug('VERIFY_INPUTPATH: ' + str(VERIFY_INPUTPATH))
+logging.debug('NEXTCLOUD_OCR_TAG: ' + NEXTCLOUD_OCR_TAG)
 
-@router.post("/image2pdf", status_code=200, response_model=Ocr)
-def image2pdf(*, image_path: str,) -> dict:
+def ocr_batch(images: list):
+    for image_path in images:
+        print(image_path)
+        post_images(image_path=image_path)
+
+@router.post("/batch", status_code=200, response_model=Ocr)
+async def post_batch(*, runbatch: bool, background_tasks: BackgroundTasks) -> dict:
+    """
+    Convert all images in the backup folder to PDF
+    """
+
+    if(not runbatch):
+        return {"image_path": runbatch,"message": "Nothing to do", "status": "Ignored"}
+
+    image_list = []
+    try:
+        with NextCloud(
+                    NEXTCLOUD_URL,
+                    user=NEXTCLOUD_USERNAME,
+                    password=NEXTCLOUD_PASSWORD,
+                    ) as nxc:
+            nc_file_list = nxc.list_folders(NEXTCLOUD_OCR_INPUT_DIR, all_properties=True).data
+            for nc_file in nc_file_list:
+                tag_scanned = False
+                nc_file_tags = nc_file.get_tags()
+                if(len(nc_file_tags) > 0):
+                    for tag in nc_file_tags:
+                        if tag.display_name == NEXTCLOUD_OCR_TAG:
+                            logging.debug('tag: ' + NEXTCLOUD_OCR_TAG)
+                            tag_scanned = True
+                image_path = nc_file.href
+                mime = mimetypes.guess_type(nc_file.href)[0]
+
+                if mime != None:
+                    mime = mime.split('/')[0]
+                    print(mime)
+                    logging.debug('image_path: ' + image_path)
+                if(not tag_scanned and not image_path.endswith('/') and mime != None and mime == 'image'):
+                    if(image_path.startswith('/remote.php/dav/files/' + NEXTCLOUD_USERNAME)):
+                        image_path = image_path[len('/remote.php/dav/files/' + NEXTCLOUD_USERNAME):]
+                        logging.debug('image_path: ' + image_path)
+                    image_list.append(image_path)
+        if len(image_list) > 0:
+            background_tasks.add_task(ocr_batch, image_list)
+        return {"image_path": runbatch,"message": str(len(image_list)) + " messages will be processed", "status": "OK"}
+    except Exception as e:
+        return {"image_path": runbatch,"message": str(e), "status": "Failure"}
+
+@router.post("/images", status_code=200, response_model=Ocr)
+def post_images(*, image_path: str,) -> dict:
     """
     Convert Image to PDF
     """
-
     logging.debug('image_path: ' + image_path)
-    logging.debug('NEXTCLOUD_URL: ' + NEXTCLOUD_URL)
-    logging.debug('NEXTCLOUD_USERNAME: ' + NEXTCLOUD_USERNAME)
-    logging.debug('NEXTCLOUD_PASSWORD: ' + NEXTCLOUD_PASSWORD)
-    logging.debug('NEXTCLOUD_OCR_INPUT_DIR: ' + NEXTCLOUD_OCR_INPUT_DIR)
-    logging.debug('NEXTCLOUD_OCR_OUTPUT_DIR: ' + NEXTCLOUD_OCR_OUTPUT_DIR)
-    logging.debug('VERIFY_INPUTPATH: ' + str(VERIFY_INPUTPATH))
-
     try:
         if(image_path.startswith(NEXTCLOUD_USERNAME+"/files")):
             image_path = image_path[len(NEXTCLOUD_USERNAME+"/files"):]
@@ -94,6 +138,7 @@ def image2pdf(*, image_path: str,) -> dict:
             try:
                 file_ocr_remote = NEXTCLOUD_OCR_OUTPUT_DIR + "/" + nc_file_name + "-" + str(nc_file_remote.file_id) + ".pdf"
                 nxc.upload_file(file_ocr_name, file_ocr_remote).data
+                nc_file_remote.add_tag(tag_name=NEXTCLOUD_OCR_TAG)
             except Exception as e:
                 print("upload error: " + str(e))
         shutil.rmtree(workdir)
